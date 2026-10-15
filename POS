@@ -1,0 +1,570 @@
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#define C_RESET   "\033[0m"
+#define C_BOLD    "\033[1m"
+#define C_RED     "\033[31m"
+#define C_GREEN   "\033[32m"
+#define C_YELLOW  "\033[33m"
+#define C_BLUE    "\033[34m"
+#define C_MAGENTA "\033[35m"
+#define C_CYAN    "\033[36m"
+
+#define VAT_RATE 0.12f
+#define DISC_RATE 0.20f
+#define STARTING_BALANCE 5000.00f
+
+typedef struct {
+    const char *category;
+    const char *name;
+    float price;
+} MenuItem;
+
+static const MenuItem menu[] = {
+    {"PIZZAS", "Pepperoni Pizza",            450.00f},
+    {"PIZZAS", "Hawaiian Pizza",             450.00f},
+    {"PIZZAS", "Cheese Pizza",               420.00f},
+    {"PIZZAS", "Garden Fresh Pizza",         430.00f},
+    {"PIZZAS", "Manager's Choice Pizza",     520.00f},
+    {"PIZZAS", "Shakey's Special Pizza",     540.00f},
+    {"PIZZAS", "Meat Lovers Pizza",          530.00f},
+    {"PIZZAS", "Supreme Pizza",              500.00f},
+    {"PIZZAS", "Bacon Cheeseburger Pizza",   520.00f},
+    {"PIZZAS", "Mushroom & Cheese Pizza",    440.00f},
+
+    {"CHICKEN", "Chicken 'N' Mojos",         350.00f},
+    {"CHICKEN", "Fried Chicken (2 pcs)",     260.00f},
+    {"CHICKEN", "Chicken Wings",             280.00f},
+    {"CHICKEN", "Spicy Chicken Wings",       300.00f},
+
+    {"PASTA", "Spaghetti",                   250.00f},
+    {"PASTA", "Carbonara",                   270.00f},
+    {"PASTA", "Baked Lasagna",               290.00f},
+    {"PASTA", "Baked Mac & Cheese",          260.00f},
+
+    {"SIDES", "Mojos",                       180.00f},
+    {"SIDES", "Garlic Bread",                120.00f},
+    {"SIDES", "Onion Rings",                 150.00f},
+    {"SIDES", "French Fries",                130.00f},
+    {"SIDES", "Cheese Sticks",               160.00f},
+
+    {"SOUP & SALAD", "Cream of Mushroom Soup", 110.00f},
+    {"SOUP & SALAD", "Caesar Salad",           190.00f},
+    {"SOUP & SALAD", "Garden Salad",           170.00f},
+
+    {"DESSERTS", "Brownie Sundae",           140.00f},
+    {"DESSERTS", "Chocolate Cake Slice",     130.00f},
+
+    {"DRINKS", "Softdrinks",                  80.00f},
+    {"DRINKS", "Iced Tea",                    90.00f},
+    {"DRINKS", "Lemonade",                    85.00f},
+    {"DRINKS", "Pineapple Juice",             95.00f},
+    {"DRINKS", "Hot Coffee",                  70.00f},
+    {"DRINKS", "Bottled Water",               50.00f}
+};
+#define ITEM_COUNT ((int)(sizeof(menu) / sizeof(menu[0])))
+
+static char  username[30];
+static int   loginSuccess;
+static int   mainChoice;
+static int   orderNumber = 1;
+
+static int   typeChoice;
+static char  orderType[10];
+
+static int   quantities[ITEM_COUNT];
+static float itemTotals[ITEM_COUNT];
+static float subtotal;
+
+static char  discountChoice;
+static int   hasDiscount;
+static float vatableSales, vatAmount, vatExempt, zeroRated, discount, total;
+
+static int   paymentComplete;
+static float payment, change, remainingBalance;
+static char  paymentMethod[20], provider[30], lastFour[8], approvalCode[8];
+
+void enableColors(void)
+{
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode))
+        SetConsoleMode(h, mode | 0x0004);
+#endif
+}
+
+void clearInput(void)
+{
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF) {}
+}
+
+static void readDigits(const char *prompt, int len, char *out)
+{
+    char buf[64];
+    int ok;
+    do {
+        ok = 1;
+        printf(C_YELLOW "%s" C_RESET, prompt);
+        scanf("%63s", buf);
+        if ((int)strlen(buf) != len) ok = 0;
+        for (int i = 0; ok && buf[i]; i++)
+            if (!isdigit((unsigned char)buf[i])) ok = 0;
+        if (!ok) printf(C_RED "Invalid input. Enter exactly %d digits." C_RESET "\n", len);
+    } while (!ok);
+    strcpy(out, buf);
+}
+
+static void line(const char *label, float amount)
+{
+    printf("%-30s%10.2f\n", label, amount);
+}
+
+void login(void)
+{
+    char password[30];
+    int attempts = 0;
+    loginSuccess = 0;
+
+    printf(C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_RED "          === SHAKEY'S POS ===" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n\n");
+    printf("Login to continue\n");
+
+    while (attempts < 3) {
+        printf(C_YELLOW "\nUsername: " C_RESET);
+        scanf("%29s", username);
+        printf(C_YELLOW "Password: " C_RESET);
+        scanf("%29s", password);
+
+        if (strcmp(username, "admin") == 0 && strcmp(password, "1234") == 0) {
+            loginSuccess = 1;
+            printf(C_GREEN "\nLogin successful!" C_RESET "\n");
+            printf(C_GREEN "Cashier: Good day! Welcome to Shakey's!" C_RESET "\n");
+            return;
+        }
+
+        attempts++;
+        printf(C_RED "\nInvalid username or password!" C_RESET "\n");
+        if (attempts < 3) {
+            printf("Please try again.\n");
+            printf("Attempts remaining: %d\n", 3 - attempts);
+        }
+    }
+}
+
+void mainMenu(void)
+{
+    printf("\n" C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_MAGENTA "              MAIN MENU" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n");
+    printf(C_GREEN "1 - New Order" C_RESET "\n");
+    printf(C_RED "2 - Exit" C_RESET "\n");
+    printf(C_YELLOW "Enter choice: " C_RESET);
+
+    if (scanf("%d", &mainChoice) != 1) {
+        clearInput();
+        mainChoice = 0;
+    }
+    if (mainChoice != 1 && mainChoice != 2)
+        printf(C_RED "Invalid choice. Please enter 1 or 2." C_RESET "\n");
+}
+
+void resetOrder(void)
+{
+    for (int i = 0; i < ITEM_COUNT; i++) {
+        quantities[i] = 0;
+        itemTotals[i] = 0.0f;
+    }
+    subtotal = 0.0f;
+    vatableSales = vatAmount = vatExempt = zeroRated = discount = total = 0.0f;
+    payment = change = remainingBalance = 0.0f;
+    paymentMethod[0] = provider[0] = lastFour[0] = approvalCode[0] = '\0';
+}
+
+void selectOrderType(void)
+{
+    printf("\n" C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_MAGENTA "             ORDER TYPE" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n");
+    printf(C_CYAN "1 - Dine-In" C_RESET "\n");
+    printf(C_MAGENTA "2 - Take-Out" C_RESET "\n");
+    do {
+        printf(C_YELLOW "Enter order type: " C_RESET);
+        if (scanf("%d", &typeChoice) != 1) {
+            clearInput();
+            typeChoice = 0;
+        }
+        if (typeChoice != 1 && typeChoice != 2)
+            printf(C_RED "Invalid order type. Choose 1 or 2." C_RESET "\n");
+    } while (typeChoice != 1 && typeChoice != 2);
+
+    strcpy(orderType, typeChoice == 1 ? "DINE-IN" : "TAKE-OUT");
+    printf(C_GREEN "%s selected." C_RESET "\n", orderType);
+}
+
+void printMenu(void)
+{
+    const char *lastCat = "";
+    printf("\n" C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_RED "             SHAKEY'S MENU" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n");
+    for (int i = 0; i < ITEM_COUNT; i++) {
+        if (strcmp(lastCat, menu[i].category) != 0) {
+            printf("\n" C_BOLD C_YELLOW "%s:" C_RESET "\n", menu[i].category);
+            lastCat = menu[i].category;
+        }
+        printf(C_CYAN "%2d" C_RESET " - %-26s Php " C_GREEN "%7.2f" C_RESET "\n",
+               i + 1, menu[i].name, menu[i].price);
+    }
+    printf("----------------------------------------\n");
+}
+
+void takeOrder(void)
+{
+    int choice, quantity;
+    char again = 'Y';
+
+    do {
+        printMenu();
+        printf(C_YELLOW "Enter your choice (1-%d): " C_RESET, ITEM_COUNT);
+
+        if (scanf("%d", &choice) != 1) {
+            clearInput();
+            printf(C_RED "Invalid input. Please enter a menu number." C_RESET "\n");
+            continue;
+        }
+
+        if (choice < 1 || choice > ITEM_COUNT) {
+            printf(C_RED "Invalid menu choice!" C_RESET "\n");
+        } else {
+            printf(C_YELLOW "Enter quantity: " C_RESET);
+            if (scanf("%d", &quantity) != 1) {
+                clearInput();
+                quantity = 0;
+            }
+
+            if (quantity <= 0) {
+                printf(C_RED "Invalid quantity!" C_RESET "\n");
+            } else {
+                quantities[choice - 1] += quantity;
+                itemTotals[choice - 1] += quantity * menu[choice - 1].price;
+                printf(C_GREEN "%d %s added." C_RESET "\n", quantity, menu[choice - 1].name);
+            }
+        }
+
+        printf(C_YELLOW "\nDo you want to order more? (Y/N): " C_RESET);
+        scanf(" %c", &again);
+        again = (char)toupper((unsigned char)again);
+    } while (again == 'Y');
+
+    subtotal = 0.0f;
+    for (int i = 0; i < ITEM_COUNT; i++)
+        subtotal += itemTotals[i];
+}
+
+void askDiscount(void)
+{
+    printf("\n" C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_MAGENTA "              DISCOUNT" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n");
+    do {
+        printf(C_YELLOW "Senior Citizen or PWD? (S/P/N): " C_RESET);
+        scanf(" %c", &discountChoice);
+        discountChoice = (char)toupper((unsigned char)discountChoice);
+        if (discountChoice != 'S' && discountChoice != 'P' && discountChoice != 'N')
+            printf(C_RED "Invalid choice. Enter S, P, or N." C_RESET "\n");
+    } while (discountChoice != 'S' && discountChoice != 'P' && discountChoice != 'N');
+
+    hasDiscount = (discountChoice == 'S' || discountChoice == 'P');
+}
+
+void computeTotals(void)
+{
+    float netOfVat = subtotal / (1.0f + VAT_RATE);
+
+    if (hasDiscount) {
+        vatExempt = netOfVat;
+        vatAmount = subtotal - netOfVat;
+        discount  = netOfVat * DISC_RATE;
+        total     = netOfVat - discount;
+        printf(C_GREEN "%s discount applied." C_RESET "\n",
+               discountChoice == 'S' ? "Senior Citizen" : "PWD");
+    } else {
+        vatableSales = netOfVat;
+        vatAmount    = subtotal - netOfVat;
+        total        = subtotal;
+        printf(C_YELLOW "No discount applied." C_RESET "\n");
+    }
+
+    printf(C_BOLD C_GREEN "\nTotal Amount Due: Php %.2f" C_RESET "\n", total);
+}
+
+void payCash(void)
+{
+    strcpy(paymentMethod, "CASH");
+    do {
+        printf(C_YELLOW "\nEnter cash amount: Php " C_RESET);
+        if (scanf("%f", &payment) != 1) {
+            clearInput();
+            payment = 0.0f;
+        }
+        if (payment < total)
+            printf(C_RED "Insufficient cash! Please enter enough money." C_RESET "\n");
+    } while (payment < total);
+
+    change = payment - total;
+    paymentComplete = 1;
+}
+
+void payCard(void)
+{
+    int cardChoice;
+    float cardBalance = STARTING_BALANCE;
+
+    printf("\nChoose card type:\n");
+    printf("1 - Visa              (Balance: Php %.2f)\n", STARTING_BALANCE);
+    printf("2 - Mastercard        (Balance: Php %.2f)\n", STARTING_BALANCE);
+    printf("3 - American Express  (Balance: Php %.2f)\n", STARTING_BALANCE);
+    do {
+        printf(C_YELLOW "Enter card type: " C_RESET);
+        if (scanf("%d", &cardChoice) != 1) {
+            clearInput();
+            cardChoice = 0;
+        }
+        if (cardChoice < 1 || cardChoice > 3)
+            printf(C_RED "Invalid card type. Choose 1, 2, or 3." C_RESET "\n");
+    } while (cardChoice < 1 || cardChoice > 3);
+
+    if (cardChoice == 1) strcpy(provider, "Visa");
+    else if (cardChoice == 2) strcpy(provider, "Mastercard");
+    else strcpy(provider, "American Express");
+
+    readDigits("Enter last 4 digits of card: ", 4, lastFour);
+    readDigits("Enter approval code (6 digits): ", 6, approvalCode);
+
+    printf("\nAvailable Card Balance: Php %.2f\n", cardBalance);
+    if (cardBalance < total) {
+        printf(C_RED "Insufficient card balance. Choose another payment method." C_RESET "\n");
+        return;
+    }
+
+    remainingBalance = cardBalance - total;
+    strcpy(paymentMethod, "CARD");
+    payment = total;
+    paymentComplete = 1;
+    printf(C_GREEN "Card payment successful!" C_RESET "\n");
+    printf("Remaining Balance: Php %.2f\n", remainingBalance);
+}
+
+void payEWallet(void)
+{
+    int walletChoice;
+    float walletBalance = STARTING_BALANCE;
+
+    printf("\nChoose e-wallet:\n");
+    printf("1 - GCash     (Balance: Php %.2f)\n", STARTING_BALANCE);
+    printf("2 - Maya      (Balance: Php %.2f)\n", STARTING_BALANCE);
+    printf("3 - GrabPay   (Balance: Php %.2f)\n", STARTING_BALANCE);
+    do {
+        printf(C_YELLOW "Enter e-wallet choice: " C_RESET);
+        if (scanf("%d", &walletChoice) != 1) {
+            clearInput();
+            walletChoice = 0;
+        }
+        if (walletChoice < 1 || walletChoice > 3)
+            printf(C_RED "Invalid e-wallet. Choose 1, 2, or 3." C_RESET "\n");
+    } while (walletChoice < 1 || walletChoice > 3);
+
+    if (walletChoice == 1) strcpy(provider, "GCash");
+    else if (walletChoice == 2) strcpy(provider, "Maya");
+    else strcpy(provider, "GrabPay");
+
+    printf("\nAvailable %s Balance: Php %.2f\n", provider, walletBalance);
+    if (walletBalance < total) {
+        printf(C_RED "Insufficient e-wallet balance. Choose another payment method." C_RESET "\n");
+        return;
+    }
+
+    remainingBalance = walletBalance - total;
+    strcpy(paymentMethod, "E-WALLET");
+    payment = total;
+    paymentComplete = 1;
+    printf(C_GREEN "%s payment successful!" C_RESET "\n", provider);
+    printf("Remaining Balance: Php %.2f\n", remainingBalance);
+}
+
+void processPayment(void)
+{
+    int paymentChoice;
+    paymentComplete = 0;
+
+    while (!paymentComplete) {
+        printf("\n" C_CYAN "========================================" C_RESET "\n");
+        printf(C_BOLD C_MAGENTA "              PAYMENT" C_RESET "\n");
+        printf(C_CYAN "========================================" C_RESET "\n");
+        printf("Total Amount: " C_BOLD C_GREEN "Php %.2f" C_RESET "\n", total);
+        printf("\n1 - Cash\n");
+        printf("2 - Credit/Debit Card   (Balance: Php %.2f)\n", STARTING_BALANCE);
+        printf("3 - E-Wallet            (Balance: Php %.2f)\n", STARTING_BALANCE);
+        printf(C_YELLOW "Enter payment method: " C_RESET);
+
+        if (scanf("%d", &paymentChoice) != 1) {
+            clearInput();
+            printf(C_RED "Invalid payment method!" C_RESET "\n");
+            continue;
+        }
+
+        if (paymentChoice == 1)      payCash();
+        else if (paymentChoice == 2) payCard();
+        else if (paymentChoice == 3) payEWallet();
+        else printf(C_RED "\nInvalid payment method! Please choose 1, 2, or 3." C_RESET "\n");
+    }
+}
+
+void printReceiptHeader(void)
+{
+    time_t now = time(NULL);
+    struct tm *local = localtime(&now);
+    char dateTime[40] = "Date/time unavailable";
+    if (local != NULL)
+        strftime(dateTime, sizeof(dateTime), "%m/%d/%Y %I:%M %p", local);
+
+    printf("\n" C_CYAN "========================================" C_RESET "\n");
+    printf(C_BOLD C_RED "               SHAKEY'S" C_RESET "\n");
+    printf("          Quezon City Branch\n");
+    printf("       Quezon Avenue, Quezon City\n");
+    printf("       VAT REG TIN: 000-000-000-000\n");
+    printf("----------------------------------------\n");
+    printf("Order No.: %04d\n", orderNumber++);
+    printf("Order Type: %s%s" C_RESET "\n",
+           typeChoice == 1 ? C_BOLD C_CYAN : C_BOLD C_MAGENTA, orderType);
+    printf("Date/Time: %s\n", dateTime);
+    printf("Cashier  : %s\n", username);
+    printf("----------------------------------------\n");
+}
+
+void printReceiptItems(void)
+{
+    for (int i = 0; i < ITEM_COUNT; i++) {
+        if (quantities[i] > 0) {
+            char qtyLine[48];
+            printf("%s\n", menu[i].name);
+            snprintf(qtyLine, sizeof(qtyLine), "  %d x %.2f", quantities[i], menu[i].price);
+            line(qtyLine, itemTotals[i]);
+        }
+    }
+}
+
+void printReceiptTotals(void)
+{
+    printf("----------------------------------------\n");
+    line("Subtotal", subtotal);
+    if (hasDiscount) {
+        printf(C_YELLOW);
+        line("Less: VAT (12%)", -vatAmount);
+        line("Less: SC/PWD Discount (20%)", -discount);
+        printf(C_RESET);
+    }
+    printf(C_BOLD C_GREEN);
+    line("TOTAL AMOUNT DUE", total);
+    printf(C_RESET);
+    printf("----------------------------------------\n");
+    line("VATable Sales", vatableSales);
+    line("VAT Amount (12%)", hasDiscount ? 0.0f : vatAmount);
+    line("VAT-Exempt Sales", vatExempt);
+    line("Zero-Rated Sales", zeroRated);
+    printf("----------------------------------------\n");
+}
+
+void printReceiptPayment(void)
+{
+    printf("Payment Method: %s", paymentMethod);
+    if (strcmp(paymentMethod, "CARD") == 0 || strcmp(paymentMethod, "E-WALLET") == 0)
+        printf(" (%s)", provider);
+    printf("\n");
+
+    if (strcmp(paymentMethod, "CARD") == 0) {
+        printf("Card No.: ************%s\n", lastFour);
+        printf("Approval No.: %s\n", approvalCode);
+        line("Amount Paid", payment);
+        line("Remaining Balance", remainingBalance);
+    } else if (strcmp(paymentMethod, "E-WALLET") == 0) {
+        line("Amount Paid", payment);
+        line("Remaining Balance", remainingBalance);
+    } else {
+        line("Cash Tendered", payment);
+        line("Change", change);
+    }
+    printf("----------------------------------------\n");
+}
+
+void printReceiptFooter(void)
+{
+    if (hasDiscount) {
+        printf("SC/PWD ID No.: ____________________\n");
+        printf("Name         : ____________________\n");
+        printf("Signature    : ____________________\n");
+        printf("----------------------------------------\n");
+    }
+    printf(C_BOLD "  THIS SERVES AS YOUR OFFICIAL RECEIPT" C_RESET "\n");
+    printf("----------------------------------------\n");
+    printf(C_BOLD C_MAGENTA "     THANK YOU FOR CHOOSING SHAKEY'S!" C_RESET "\n");
+    printf(C_YELLOW "            Have a great day!" C_RESET "\n");
+    printf(C_CYAN "========================================" C_RESET "\n");
+}
+
+void printReceipt(void)
+{
+    printReceiptHeader();
+    printReceiptItems();
+    printReceiptTotals();
+    printReceiptPayment();
+    printReceiptFooter();
+}
+
+int main(void)
+{
+    enableColors();
+    login();
+
+    if (!loginSuccess) {
+        printf(C_BOLD C_RED "\nToo many failed attempts.\nAccess denied!" C_RESET "\n");
+        return 0;
+    }
+
+    while (1) {
+        mainMenu();
+
+        if (mainChoice == 2) {
+            printf(C_BOLD C_YELLOW "\nLogging out... Thank you and goodbye!" C_RESET "\n");
+            break;
+        }
+        if (mainChoice != 1)
+            continue;
+
+        resetOrder();
+        selectOrderType();
+        takeOrder();
+
+        if (subtotal <= 0.0f) {
+            printf(C_YELLOW "\nNo items were ordered. Order cancelled." C_RESET "\n");
+            continue;
+        }
+
+        askDiscount();
+        computeTotals();
+        processPayment();
+        printReceipt();
+    }
+
+    return 0;
+}
+    
